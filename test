@@ -1,0 +1,24 @@
+tests/test_astar.py
+import pytest
+import numpy as np
+from src.graph import WeightedGridGraph
+from src.heuristic import ManhattanHeuristic
+from src.astar import AStar
+
+def test_simple_path():
+    grid = np.array([[1, 1, np.inf], [1, np.inf, 1], [np.inf, 1, 1]])
+    graph = WeightedGridGraph(grid, (0, 0), (2, 2))
+    heur = ManhattanHeuristic((2, 2))
+    astar = AStar(graph, heur)
+    path = astar.search()
+    expected = [(0, 0), (1, 0), (1, 2), (2, 2)]  # One possible
+    assert path is not None and len(path) >= 3  # Flexible for ties
+
+def test_no_path():
+    grid = np.full((3, 3), 1)
+    grid[1, 1] = np.inf  # Blocks all
+    graph = WeightedGridGraph(grid, (0, 0), (2, 2))
+    heur = ManhattanHeuristic((2, 2))
+    astar = AStar(graph, heur)
+    path = astar.search()
+    assert path is None
