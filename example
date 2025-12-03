@@ -1,0 +1,48 @@
+grid_demo.py
+
+from _future_ import annotations
+from src.advanced_astar.graph import GridGraph
+from src.advanced_astar.astar import AStarSearch
+from src.advanced_astar.heuristics import ManhattanHeuristic
+
+
+def print_grid_path(width, height, obstacles, path):
+    path_set = set(path)
+    for r in range(height):
+        row = []
+        for c in range(width):
+            cell = (r, c)
+            if cell in path_set:
+                char = "*"
+            elif cell in obstacles:
+                char = "#"
+            else:
+                char = "."
+            row.append(char)
+        print("".join(row))
+
+
+def main():
+    width, height = 10, 10
+    obstacles = {(3, 3), (3, 4), (3, 5), (4, 5), (5, 5)}
+    start = (0, 0)
+    goal = (9, 9)
+
+    graph = GridGraph(width=width, height=height, obstacles=obstacles)
+    heuristic = ManhattanHeuristic()
+    searcher = AStarSearch(graph, heuristic)
+
+    result = searcher.search(start, goal)
+    if not result.stats.found:
+        print("No path found.")
+        return
+
+    print("Path:", result.path)
+    print("Nodes expanded:", result.stats.nodes_expanded)
+    print("Path cost:", result.stats.path_cost)
+    print()
+    print_grid_path(width, height, obstacles, result.path)
+
+
+if _name_ == "_main_":
+    main()
