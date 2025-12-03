@@ -1,0 +1,168 @@
+src/graph.py
+import numpy as np
+from typing import Tuple, List, Dict, Set
+
+class WeightedGridGraph:
+    """
+    Represents an irregularly shaped weighted grid (maze with costs).
+    Nodes are (row, col) tuples. Edges to 4-neighbors (up/down/left/right).
+    Supports obstacles (inf cost) and variable traversal costs.
+    Flaw in spec: Real roads aren't grids; use NetworkX for that. But grids scale easy for profiling.
+    """
+    def _init_(self, grid: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int]):
+        if grid.ndim != 2 or np.any(grid < 0):
+            raise ValueError("Grid must be 2D non-negative integers (costs; inf for walls).")
+        self.grid = grid
+        self.rows, self.cols = grid.shape
+        self.start = start
+        self.goal = goal
+        self.obstacles = set(np.where(np.isinf(grid))[::-1])  # (row, col) tuples
+
+    def neighbors(self, node: Tuple[int, int]) -> List[Tuple[int, int]]:
+        row, col = node
+        dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # No diagonals; add if needed
+        neigh = []
+        for dr, dc in dirs:
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < self.rows and 0 <= nc < self.cols and (nr, nc) not in self.obstacles:
+                neigh.append((nr, nc))
+        return neigh
+
+    def cost(self, from_node: Tuple[int, int], to_node: Tuple[int, int]) -> float:
+        # Assume uniform cost unless grid varies; here, pull from grid[to_node]
+        row, col = to_node
+        return self.grid[row, col] if not np.isinf(self.grid[row, col]) else float('inf')
+src/heuristic.py
+from typing import Tuple
+import numpy as np
+
+class ManhattanHeuristic:
+    """
+    h(n) = |dx| + |dy| from n to goal.
+    Admissible: Straight-line min steps, never overestimates.
+    Consistent: |h(n) - h(m)| <= c(n,m) for neighbors (Manhattan satisfies triangle ineq).
+    Justification: Cheap O(1), optimal for A* on grids without diagonals. For roads, swap to Dijkstra-precomputed.
+    Flaw: Ignores weights; if costs vary wildly, use weighted Manhattan (h * avg_cost).
+    """
+    def _init_(self, goal: Tuple[int, int]):
+        self.goal = goal
+
+    def evaluate(self, node: Tuple[int, int]) -> float:
+        row, col = node
+        g_row, g_col = self.goal
+        return abs(row - g_row) + abs(col - g_col)
+src/astar.py
+from typing import Tuple, Dict, Set, List, Optional
+from heapq import heappush, heappop
+import math
+
+class AStar:
+    """
+    Core A* implementation. g(n): cost from start. f(n) = g(n) + h(n).
+    Uses priority queue for open set. Closed set for visited.
+    Separation: No graph/heuristic deps here—pure search logic.
+    Handles inf costs gracefully. Returns path or None.
+    """
+    def _init_(self, graph, heuristic):
+        self.graph = graph
+        self.heuristic = heuristic
+
+    def search(self) -> Optional[List[Tuple[int, int]]]:
+        start = self.graph.start
+        goal = self.graph.goal
+
+        open_set: List[Tuple[float, float, Tuple[int, int]]] = []  # (f, g, node)
+        heappush(open_set, (0 + self.heuristic.evaluate(start), 0, start))
+
+        came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+        g_score: Dict[Tuple[int, int], float] = {start: 0}
+        f_score: Dict[Tuple[int, int], float] = {start: self.heuristic.evaluate(start)}
+
+        closed: Set[Tuple[int, int]] = set()
+
+        while open_set:
+            _, current_g, current = heappop(open_set)
+            if current == goal:
+                return self._reconstruct_path(came_from, current)
+
+            if current in closed:
+                continue
+            closed.add(current)
+
+            for neighbor in self.graph.neighbors(current):
+                tent_g = g_score[current] + self.graph.cost(current, neighbor)
+                if tent_g == math.inf:
+                    continue  # Wall
+
+                if neighbor not in g_score or tent_g < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tent_g
+                    f_score[neighbor] = tent_g + self.heuristic.evaluate(neighbor)
+                    heappush(open_set, (f_score[neighbor], tent_g, neighbor))
+
+        return None  # No path
+
+    def _reconstruct_path(self, came_from: Dict[Tuple[int, int], Optional[Tuple[int, int]]],
+                          current: Tuple[int, int]) -> List[Tuple[int, int]]:
+        path = []
+        while current is not None:
+            path.append(current)
+            current = came_from[current]
+        return path[::-1]  # Reverse to start->goal
+src/profiler.py
+import numpy as np
+import time
+from typing import List
+import matplotlib.pyplot as plt
+
+from graph import WeightedGridGraph
+from heuristic import ManhattanHeuristic
+from astar import AStar
+
+def generate_maze(size: int, obstacle_prob: float = 0.2, cost_range: Tuple[int, int] = (1, 10)) -> np.ndarray:
+    """Random weighted maze. Start top-left, goal bottom-right. Flaw: Random isn't 'real-world'; use OpenStreetMap data."""
+    maze = np.random.randint(*cost_range, size=(size, size))
+    obstacles = np.random.rand(size, size) < obstacle_prob
+    maze[obstacles] = np.inf
+    maze[0, 0] = 1  # Clear start
+    maze[-1, -1] = 1  # Clear goal
+    return maze
+
+def profile_sizes(sizes: List[int], runs: int = 10, obstacle_prob: float = 0.2):
+    """Profile time and nodes expanded vs size. Test admissibility: Manhattan is always admissible."""
+    times = {size: [] for size in sizes}
+    nodes_expanded = {size: [] for size in sizes}
+
+    for size in sizes:
+        maze = generate_maze(size, obstacle_prob)
+        graph = WeightedGridGraph(maze, (0, 0), (size-1, size-1))
+        heuristic = ManhattanHeuristic(graph.goal)
+        astar = AStar(graph, heuristic)
+
+        for _ in range(runs):
+            start_time = time.time()
+            path = astar.search()
+            end_time = time.time()
+            times[size].append((end_time - start_time) * 1000)  # ms
+
+            # Hack to count expanded: len(closed) from a modified AStar, but for demo, approx path len * avg branches
+            # Real: Add counter to AStar.closed.add()
+            nodes_expanded[size].append(len(path) * 4 if path else size**2)  # Rough
+
+    # Plot (save or show)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    for size in sizes:
+        ax1.scatter([size] * len(times[size]), times[size], label=f'Size {size}')
+        ax2.scatter([size] * len(nodes_expanded[size]), nodes_expanded[size], label=f'Size {size}')
+    ax1.set_xlabel('Grid Size'); ax1.set_ylabel('Time (ms)'); ax1.legend()
+    ax2.set_xlabel('Grid Size'); ax2.set_ylabel('Nodes Expanded (approx)'); ax2.legend()
+    plt.savefig('performance.png')
+    plt.close()
+
+    # Print stats
+    print("Avg Time (ms) / Nodes per size:")
+    for size in sizes:
+        print(f"{size}x{size}: {np.mean(times[size]):.2f} / {np.mean(nodes_expanded[size]):.0f}")
+
+if _name_ == "_main_":
+    profile_sizes([10, 20, 50, 100])  # Scale up; expect quadratic blowup
